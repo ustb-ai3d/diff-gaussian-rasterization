@@ -219,6 +219,8 @@ int CudaRasterizer::Rasterizer::forward(
 	float* depth,
 	bool antialiasing,
 	int* radii,
+	float* T_sum,
+	int* T_count,
 	bool debug)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -335,7 +337,9 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
 		geomState.depths,
-		depth), debug)
+		depth,
+		T_sum,
+		T_count), debug)
 
 	return num_rendered;
 }
