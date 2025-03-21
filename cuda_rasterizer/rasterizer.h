@@ -33,15 +33,23 @@ namespace CudaRasterizer
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
 			const int P, int D, int M,
+			const float timestamp,
+			const float* trbfcenter,
+			const float* trbfscale,
+			const float* motion,
+			const float* means3D,
+			float* means3Ddummy,
+			const float* opacities,
+			float* opacitiesdummy,
 			const float* background,
 			const int width, int height,
-			const float* means3D,
 			const float* shs,
 			const float* colors_precomp,
-			const float* opacities,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
+			const float* rotationst,
+			float* rotationsdummy,
 			const float* cov3D_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -50,7 +58,9 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			float* out_color,
 			int* radii = nullptr,
-			bool debug = false);
+			int* rects = nullptr,
+			float* boxmin = nullptr,
+			float* boxmax = nullptr);
 
 		static void backward(
 			const int P, int D, int M, int R,
@@ -80,8 +90,7 @@ namespace CudaRasterizer
 			float* dL_dcov3D,
 			float* dL_dsh,
 			float* dL_dscale,
-			float* dL_drot,
-			bool debug);
+			float* dL_drot);
 	};
 };
 

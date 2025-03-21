@@ -151,13 +151,68 @@ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 r
 	cov3D[5] = Sigma[2][2];
 }
 
+
 // Perform initial steps for each Gaussian prior to rasterization.
+
+template<int C>
+__global__ void prepreprocessCUDA(
+	int P, 
+	const float timestamp,
+	const float* trbfcenter,
+	const float* trbfscale,
+	const float* motion,
+	const float* orig_points,
+	float* orig_pointsdummy,
+	const float* opacities,
+	float* oppacitiesdummy,
+	const float* rotations,
+	const float* rotationst,
+	float* rotationsdummy)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= P)
+		return;
+
+	// Initialize radius and touched tiles to 0. If this isn't changed,
+	// this Gaussian will not be processed further.
+	float trbfdistance = timestamp - trbfcenter[idx];
+	float trbfdistance2 = trbfdistance * trbfdistance;
+	float trbfdistance3 = trbfdistance2 * trbfdistance;
+
+
+
+
+	orig_pointsdummy[3 * idx] = orig_points[3 * idx] + trbfdistance * motion[9 * idx] + trbfdistance2 * motion[9 * idx + 3] + trbfdistance3 * motion[9 * idx + 6];
+	orig_pointsdummy[3 * idx + 1] = orig_points[3 * idx + 1] + trbfdistance * motion[9 * idx + 1] + trbfdistance2 * motion[9 * idx + 4] + trbfdistance3 * motion[9 * idx + 7];
+	orig_pointsdummy[3 * idx + 2] = orig_points[3 * idx + 2] + trbfdistance * motion[9 * idx + 2] + trbfdistance2 * motion[9 * idx + 5] + trbfdistance3 * motion[9 * idx + 8];
+
+	float r0 = rotations[4 * idx] + trbfdistance * rotationst[4 * idx];
+	float r1 = rotations[4 * idx+1] + trbfdistance * rotationst[4 * idx+1];
+	float r2 = rotations[4 * idx+2] + trbfdistance * rotationst[4 * idx+2];
+	float r3 = rotations[4 * idx+3] + trbfdistance * rotationst[4 * idx+3];
+
+
+
+	float length = sqrt(r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3);
+	length = 1 / length;
+	rotationsdummy[4 * idx] = r0 * length;
+	rotationsdummy[4 * idx + 1] = r1 * length;
+	rotationsdummy[4 * idx + 2] = r2 * length;
+	rotationsdummy[4 * idx + 3] = r3 * length;
+
+	trbfdistance = trbfdistance / trbfscale[idx];
+
+	trbfdistance = exp(-1 * trbfdistance * trbfdistance);
+	oppacitiesdummy[idx] = opacities[idx] * trbfdistance;
+}
+
+
 template<int C>
 __global__ void preprocessCUDA(int P, int D, int M,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
-	const glm::vec4* rotations,
+	glm::vec4* rotations,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
@@ -177,7 +232,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered,
+	int2* rects,
+	float3 boxmin,
+	float3 boxmax)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -195,6 +253,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Transform point by projecting
 	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+
+	if (p_orig.x < boxmin.x || p_orig.y < boxmin.y || p_orig.z < boxmin.z ||
+		p_orig.x > boxmax.x || p_orig.y > boxmax.y || p_orig.z > boxmax.z)
+		return;
+
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
@@ -226,13 +289,27 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// 2D covariance matrix). Use extent to compute a bounding rectangle
 	// of screen-space tiles that this Gaussian overlaps with. Quit if
 	// rectangle covers 0 tiles. 
+
 	float mid = 0.5f * (cov.x + cov.z);
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 	uint2 rect_min, rect_max;
-	getRect(point_image, my_radius, rect_min, rect_max, grid);
+
+	if (rects == nullptr) 	// More conservative
+	{
+		getRect(point_image, my_radius, rect_min, rect_max, grid);
+	}
+	else // Slightly more aggressive, might need a math cleanup
+	{
+		const int2 my_rect = { (int)ceil(3.f * sqrt(cov.x)), (int)ceil(3.f * sqrt(cov.z)) };
+		rects[idx] = my_rect;
+		getRect(point_image, my_rect, rect_min, rect_max, grid);
+	}
+
+
+
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
@@ -403,8 +480,8 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* means3D,
 	const glm::vec3* scales,
 	const float scale_modifier,
-	const glm::vec4* rotations,
-	const float* opacities,
+	glm::vec4* rotations,
+	float* opacities,
 	const float* shs,
 	bool* clamped,
 	const float* cov3D_precomp,
@@ -423,7 +500,10 @@ void FORWARD::preprocess(int P, int D, int M,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered,
+	int2* rects,
+	float3 boxmin,
+	float3 boxmax)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
@@ -450,6 +530,40 @@ void FORWARD::preprocess(int P, int D, int M,
 		conic_opacity,
 		grid,
 		tiles_touched,
-		prefiltered
+		prefiltered,
+		rects,
+		boxmin,
+		boxmax
 		);
+}
+
+
+void FORWARD::prepreprocess(
+	int P,
+	const float timestamp,
+	const float* trbfcenter,
+	const float* trbfscale,
+	const float* motion,
+	const float* orig_points,
+	float* orig_pointsdummy,
+	const float* opacities,
+	float* opacitiesdummy,
+	const float* rotations,
+	const float* rotationst,
+	float* rotationsdummy)
+{
+
+	prepreprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+		P,
+		timestamp,
+		trbfcenter,
+		trbfscale,
+		motion,
+		orig_points,
+		orig_pointsdummy,
+		opacities,
+		opacitiesdummy,
+		rotations,
+		rotationst,
+		rotationsdummy);
 }
