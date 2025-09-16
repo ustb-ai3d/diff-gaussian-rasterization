@@ -249,9 +249,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (colors_precomp == nullptr)
 	{
 		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
+		rgb[idx * 3 + 0] = result.x;
+		rgb[idx * 3 + 1] = result.y;
+		rgb[idx * 3 + 2] = result.z;
 	}
 
 	// Store some useful helper data for the next steps.
@@ -317,7 +317,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+	float C[3] = { 0 };
 
 	float expected_invdepth = 0.0f;
 
@@ -370,8 +370,8 @@ renderCUDA(
 			}
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			for (int ch = 0; ch < 3; ch++)
+				C[ch] += features[collected_id[j] * 3 + ch] * alpha * T;
 
 			if(invdepth)
 			expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
@@ -390,14 +390,29 @@ renderCUDA(
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
-		final_T[pix_id] = T;
-		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+        final_T[pix_id] = T;
+        n_contrib[pix_id] = last_contributor;
 
-		if (invdepth)
-		invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
-	}
+        // MODIFICATION START: Output RGBA instead of blending with background
+        // The number of output channels should be 4 (RGBA)
+        // The Python side must provide a buffer with 4 channels.
+        if (CHANNELS == 4)
+        {
+            out_color[0 * H * W + pix_id] = C[0]; // R
+            out_color[1 * H * W + pix_id] = C[1]; // G
+            out_color[2 * H * W + pix_id] = C[2]; // B
+            out_color[3 * H * W + pix_id] = 1.f - T; // Alpha
+        }
+        else // Keep original behavior for other channel counts
+        {
+            for (int ch = 0; ch < CHANNELS; ch++)
+                out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+        }
+        // MODIFICATION END
+
+        if (invdepth)
+        invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
+    }
 }
 
 void FORWARD::render(
