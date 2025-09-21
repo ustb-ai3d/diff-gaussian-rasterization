@@ -39,6 +39,7 @@ namespace CudaRasterizer
 			const float* shs,
 			const float* colors_precomp,
 			const float* opacities,
+			const bool* rndbltys,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,

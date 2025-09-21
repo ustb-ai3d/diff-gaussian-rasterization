@@ -287,7 +287,8 @@ renderCUDA(
 	const float* __restrict__ depths,
 	float* __restrict__ invdepth,
 	float* T_sum,
-	int* T_count)
+	int* T_count,
+	const bool* __restrict__ rndbltys)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -317,7 +318,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[3] = { 0 };
+	float C[CHANNELS] = { 0 };
 
 	float expected_invdepth = 0.0f;
 
@@ -352,6 +353,7 @@ renderCUDA(
 			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
 			float4 con_o = collected_conic_opacity[j];
 			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			bool rndblty = rndbltys[collected_id[j]];
 			if (power > 0.0f)
 				continue;
 
@@ -371,7 +373,8 @@ renderCUDA(
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < 3; ch++)
-				C[ch] += features[collected_id[j] * 3 + ch] * alpha * T;
+				C[ch] += features[collected_id[j] * 3 + ch] * alpha * T * rndblty;
+			C[3] += alpha * T * rndblty;
 
 			if(invdepth)
 			expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
@@ -401,7 +404,7 @@ renderCUDA(
             out_color[0 * H * W + pix_id] = C[0]; // R
             out_color[1 * H * W + pix_id] = C[1]; // G
             out_color[2 * H * W + pix_id] = C[2]; // B
-            out_color[3 * H * W + pix_id] = 1.f - T; // Alpha
+            out_color[3 * H * W + pix_id] = C[3]; // Alpha
         }
         else // Keep original behavior for other channel counts
         {
@@ -430,7 +433,8 @@ void FORWARD::render(
 	float* depths,
 	float* depth,
 	float* T_sum,
-	int* T_count)
+	int* T_count,
+	const bool* rndbltys)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -446,7 +450,8 @@ void FORWARD::render(
 		depths,
 		depth,
 		T_sum,
-		T_count);
+		T_count,
+		rndbltys);
 }
 
 void FORWARD::preprocess(int P, int D, int M,

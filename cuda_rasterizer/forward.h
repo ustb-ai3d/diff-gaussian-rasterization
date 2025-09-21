@@ -64,7 +64,8 @@ namespace FORWARD
 		float* depths,
 		float* depth,
 		float* T_sum,
-		int* T_count);
+		int* T_count,
+		const bool* rndbltys);
 }
 
 

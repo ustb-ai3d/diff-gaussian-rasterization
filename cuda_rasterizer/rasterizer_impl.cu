@@ -206,6 +206,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* shs,
 	const float* colors_precomp,
 	const float* opacities,
+	const bool* rndbltys,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
@@ -334,7 +335,8 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.depths,
 		depth,
 		T_sum,
-		T_count), debug)
+		T_count,
+		rndbltys), debug)
 
 	return num_rendered;
 }
